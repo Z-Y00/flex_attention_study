@@ -46,6 +46,12 @@ the current setup and
 previous image comparison. Both reports include block statistics,
 mask-construction measurements, and correctness results.
 
+The
+[Primus-derived analytical roofline](results/gfx942-sbd-analytical-roofline.md)
+uses exact selected block counts to compare the optimized forward and backward
+latencies with MI300X BF16/HBM limits. The calculation is reproducible with
+`analysis/sbd_roofline.py`; it is an analytical model, not benchmark code.
+
 ## Build
 
 ```bash
