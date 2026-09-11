@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# The workload benchmark stays outside this repository by design.
+benchmark.py

@@ -1,0 +1,81 @@
+diff --git a/torch/_inductor/kernel/flex/flex_attention.py b/torch/_inductor/kernel/flex/flex_attention.py
+index 5ca8bcf..b43b22a 100644
+--- a/torch/_inductor/kernel/flex/flex_attention.py
++++ b/torch/_inductor/kernel/flex/flex_attention.py
+@@ -309,3 +309,4 @@ def flex_attention(*args, **kwargs):
+         cur_kernel_options.setdefault("num_stages", conf.num_stages)
+-        cur_kernel_options.setdefault("num_warps", conf.num_warps)
++        default_num_warps = 4 if min(SPARSE_Q_BLOCK_SIZE, SPARSE_KV_BLOCK_SIZE) <= 64 else conf.num_warps
++        cur_kernel_options.setdefault("num_warps", default_num_warps)
+         if cur_kernel_options.get("num_consumer_groups", False):
+@@ -475,8 +475,13 @@ def flex_attention(*args, **kwargs):
+         if cur_kernel_options["USE_TMA"] and can_use_tma(query, key, value):
+             cur_kernel_options["USE_TMA"] = True
+ 
+-        cur_kernel_options.setdefault("BLOCK_M", conf.block_m)
+-        cur_kernel_options.setdefault("BLOCK_N", conf.block_n)
++        # A BlockMask may use a finer granularity than the architecture's
++        # preferred dense-attention tile. Keep explicit user choices intact,
++        # but shrink defaults so at least one valid Triton choice survives.
++        # This is especially important on gfx942, whose D128 defaults are
++        # commonly wider than 16- or 64-token sparse blocks.
++        cur_kernel_options.setdefault("BLOCK_M", min(conf.block_m, SPARSE_Q_BLOCK_SIZE))
++        cur_kernel_options.setdefault("BLOCK_N", min(conf.block_n, SPARSE_KV_BLOCK_SIZE))
+         # Blocksparse options
+         cur_kernel_options.setdefault("SPARSE_Q_BLOCK_SIZE", SPARSE_Q_BLOCK_SIZE)
+         cur_kernel_options.setdefault("SPARSE_KV_BLOCK_SIZE", SPARSE_KV_BLOCK_SIZE)
+@@ -737,13 +742,5 @@ def flex_attention_backward(*args, **kwargs):
+     original_kernel_options = kernel_options.copy()
+     for conf in configs:
+-        if (
+-            SPARSE_KV_BLOCK_SIZE % conf.block_m != 0
+-            or SPARSE_Q_BLOCK_SIZE % conf.block_m != 0
+-            or SPARSE_KV_BLOCK_SIZE % conf.block_n != 0
+-            or SPARSE_Q_BLOCK_SIZE % conf.block_n != 0
+-        ):
+-            continue
+-
+         # Performance tuning
+         # Triton heuristics
+         cur_kernel_options = original_kernel_options.copy()
+@@ -753,3 +750,4 @@ def flex_attention_backward(*args, **kwargs):
+-        cur_kernel_options.setdefault("num_warps", conf.num_warps)
++        default_num_warps = 4 if min(SPARSE_Q_BLOCK_SIZE, SPARSE_KV_BLOCK_SIZE) <= 64 else conf.num_warps
++        cur_kernel_options.setdefault("num_warps", default_num_warps)
+         cur_kernel_options.setdefault("num_stages", conf.num_stages)
+ 
+@@ -767,10 +764,30 @@ def flex_attention_backward(*args, **kwargs):
+                 "num_buffers_warp_spec", num_buffers_warp_spec
+             )
+ 
+-        cur_kernel_options.setdefault("BLOCK_M1", conf.block_m)
+-        cur_kernel_options.setdefault("BLOCK_N1", conf.block_n)
+-        cur_kernel_options.setdefault("BLOCK_M2", conf.block_n)
+-        cur_kernel_options.setdefault("BLOCK_N2", conf.block_m)
++        # The old eligibility check rejected a configuration before considering
++        # user kernel options and before adapting dense defaults to the sparse
++        # BlockMask granularity. Derive compatible defaults first, then validate
++        # the actual values that will reach the Triton template.
++        default_m1 = min(conf.block_m, SPARSE_Q_BLOCK_SIZE)
++        default_n1 = min(conf.block_n, SPARSE_KV_BLOCK_SIZE)
++        default_m2 = min(conf.block_n, SPARSE_Q_BLOCK_SIZE)
++        default_n2 = min(conf.block_m, SPARSE_KV_BLOCK_SIZE)
++
++        cur_kernel_options.setdefault("BLOCK_M1", default_m1)
++        cur_kernel_options.setdefault("BLOCK_N1", default_n1)
++        cur_kernel_options.setdefault("BLOCK_M2", default_m2)
++        cur_kernel_options.setdefault("BLOCK_N2", default_n2)
++
++        if (
++            SPARSE_KV_BLOCK_SIZE % cur_kernel_options["BLOCK_N1"] != 0
++            or SPARSE_Q_BLOCK_SIZE % cur_kernel_options["BLOCK_M1"] != 0
++            or SPARSE_KV_BLOCK_SIZE % cur_kernel_options["BLOCK_N2"] != 0
++            or SPARSE_Q_BLOCK_SIZE % cur_kernel_options["BLOCK_M2"] != 0
++            # Static assertions in the backward Triton template.
++            or cur_kernel_options["BLOCK_N1"] % cur_kernel_options["BLOCK_M1"] != 0
++            or cur_kernel_options["BLOCK_M2"] % cur_kernel_options["BLOCK_N2"] != 0
++        ):
++            continue
+ 
+         # Blocksparse options
+         cur_kernel_options.setdefault("SPARSE_Q_BLOCK_SIZE", SPARSE_Q_BLOCK_SIZE)
