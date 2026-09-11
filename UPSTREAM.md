@@ -12,25 +12,26 @@ Base runtime:
 
 ```text
 Image:
-  rocm/sgl-dev:v0.5.17-rocm720-mi30x-20260819
+  rocm/primus:v26.7-pytorch2.12-te2.17
 
 Image digest:
-  sha256:3d48aacbd9c445cc55e02ad1431cb5173a603baf17b6acf9e4378858f2d70aa3
+  sha256:68b7eb7d4db99ecfa18bd7972e5b6d8b78e56219f0a144a8ef5e9a993e57f195
 
 PyTorch:
-  2.9.1+rocm7.2.0.git7e1940d4
+  2.12.0+rocm10.0.0
+  git 8c5ddc4002609fc54816dac039975bc39d4a6665
 
 Triton:
-  3.7.0
+  3.8.0
 
 ROCm/HIP:
-  7.2.26015-fc0010cf6a
+  7.15.26333
 ```
 
 Permanent PyTorch source revision:
 
 ```text
-https://github.com/pytorch/pytorch/commit/7e1940d4
+https://github.com/pytorch/pytorch/commit/8c5ddc4002609fc54816dac039975bc39d4a6665
 ```
 
 Affected functions:
@@ -43,7 +44,14 @@ torch._inductor.kernel.flex.flex_attention.flex_attention_backward
 Patch:
 
 ```text
-patches/pytorch-flexattention-small-sparse-blocks.patch
+patches/pytorch2.12-flexattention-small-sparse-blocks.patch
+```
+
+The earlier PyTorch 2.9 study is retained as:
+
+```text
+patches/pytorch2.9-flexattention-small-sparse-blocks.patch
+results/gfx942-sbd-pytorch2.9.md
 ```
 
 ## Related upstream work
@@ -109,7 +117,7 @@ PY
 ```bash
 patch --dry-run --batch --forward -p1 \
   -d <python-site-packages> \
-  < patches/pytorch-flexattention-small-sparse-blocks.patch
+  < patches/pytorch2.12-flexattention-small-sparse-blocks.patch
 ```
 
 4. If the source moved, rebase the small logical change rather than adjusting

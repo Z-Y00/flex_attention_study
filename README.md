@@ -25,33 +25,39 @@ The patch:
 4. Preserves explicit user kernel options and leaves 128+-token and dense
    defaults unchanged.
 
-For the studied SBD workload, sparse block size 64 is best overall:
+The current default image is Primus with PyTorch 2.12. Sparse block size 64 is
+still best overall:
 
 ```text
-block 256: forward 0.2072 ms, forward+backward 2.6714 ms
-block  64: forward 0.1525 ms, forward+backward 0.7142 ms
-block  16: forward 0.1437 ms, forward+backward 0.7649 ms
+block 256: forward 0.2323 ms, forward+backward 1.4077 ms
+block  64: forward 0.2604 ms, forward+backward 0.8147 ms
+block  32: forward 0.3197 ms, forward+backward 0.8908 ms
+block  16: forward 0.4031 ms, forward+backward 1.0095 ms
 ```
 
-Block 64 reduces measured training attention time by 3.74x relative to the
-working 256-block baseline. Block 16 has slightly faster forward but worse
-backward, so it is not the recommended default.
+Block 64 reduces measured training attention time by 1.73x relative to the
+working 256-block baseline. PyTorch 2.12 substantially improves the baseline
+backward, while fine blocks trade slower forward traversal for much faster
+backward sparsity.
 
-See [results/gfx942-sbd.md](results/gfx942-sbd.md) for the complete setup,
-block statistics, mask-construction measurements, and correctness results.
+See [results/gfx942-sbd-pytorch2.12.md](results/gfx942-sbd-pytorch2.12.md) for
+the current setup and
+[results/gfx942-sbd-pytorch2.9.md](results/gfx942-sbd-pytorch2.9.md) for the
+previous image comparison. Both reports include block statistics,
+mask-construction measurements, and correctness results.
 
 ## Build
 
 ```bash
 docker build \
-  -t flex-attention-study:pytorch-small-blocks \
+  -t flex-attention-study:pytorch2.12-small-blocks \
   .
 ```
 
 The default base image is:
 
 ```text
-rocm/sgl-dev:v0.5.17-rocm720-mi30x-20260819
+rocm/primus:v26.7-pytorch2.12-te2.17
 ```
 
 Override it when testing another image:
@@ -59,7 +65,7 @@ Override it when testing another image:
 ```bash
 docker build \
   --build-arg BASE_IMAGE=<image> \
-  -t flex-attention-study:pytorch-small-blocks \
+  -t flex-attention-study:pytorch2.12-small-blocks \
   .
 ```
 
@@ -80,13 +86,13 @@ docker run --rm \
   -e TORCHINDUCTOR_MAX_AUTOTUNE=0 \
   -v /path/to/external/benchmark/directory:/workspace \
   -w /workspace \
-  flex-attention-study:pytorch-small-blocks \
+  flex-attention-study:pytorch2.12-small-blocks \
   python3 benchmark.py
 ```
 
 The workload must request `mask_block_size=64` to use the recommended
-granularity. The patch also makes block size 16 executable, but it was slower
-for forward+backward in the measured configuration.
+granularity. The patch also makes block sizes 32 and 16 executable, but both
+were slower for forward+backward in the measured PyTorch 2.12 configuration.
 
 ## Status
 
