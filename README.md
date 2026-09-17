@@ -63,6 +63,10 @@ See [results/gfx942-sbd-primus-v26.2.md](results/gfx942-sbd-primus-v26.2.md)
 for the sweeps behind those numbers, block statistics, mask-construction
 measurements and correctness results.
 
+[docs/CUSTOMER.md](docs/CUSTOMER.md) is the hand-off guide: how to apply the
+patch to the workload, the caller change needed for the full speedup, and how
+to verify it.
+
 Earlier images:
 [PyTorch 2.12](results/gfx942-sbd-pytorch2.12.md) (where block 64 was the
 optimum and only the backward failed) and
