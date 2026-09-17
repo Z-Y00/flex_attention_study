@@ -8,30 +8,30 @@ The patch modifies:
 torch/_inductor/kernel/flex/flex_attention.py
 ```
 
-Base runtime:
+Current base runtime:
 
 ```text
 Image:
-  rocm/primus:v26.7-pytorch2.12-te2.17
+  rocm/primus:v26.2
 
 Image digest:
-  sha256:68b7eb7d4db99ecfa18bd7972e5b6d8b78e56219f0a144a8ef5e9a993e57f195
+  sha256:aa6fe22be0aff81de1e67d5754daf2e5d838ed781dbe592f10ceddf614b782d9
 
 PyTorch:
-  2.12.0+rocm10.0.0
-  git 8c5ddc4002609fc54816dac039975bc39d4a6665
+  2.10.0a0+git449b176
+  git 449b1768410104d3ed79d3bcfe4ba1d65c7f22c0
 
 Triton:
-  3.8.0
+  3.6.0
 
 ROCm/HIP:
-  7.15.26333
+  7.2.26015
 ```
 
 Permanent PyTorch source revision:
 
 ```text
-https://github.com/pytorch/pytorch/commit/8c5ddc4002609fc54816dac039975bc39d4a6665
+https://github.com/pytorch/pytorch/commit/449b1768410104d3ed79d3bcfe4ba1d65c7f22c0
 ```
 
 Affected functions:
@@ -44,15 +44,25 @@ torch._inductor.kernel.flex.flex_attention.flex_attention_backward
 Patch:
 
 ```text
-patches/pytorch2.12-flexattention-small-sparse-blocks.patch
+patches/pytorch2.10-flexattention-small-sparse-blocks.patch
 ```
 
-The earlier PyTorch 2.9 study is retained as:
+Earlier studies are retained as:
 
 ```text
+patches/pytorch2.12-flexattention-small-sparse-blocks.patch
+results/gfx942-sbd-pytorch2.12.md
+  rocm/primus:v26.7-pytorch2.12-te2.17
+  sha256:68b7eb7d4db99ecfa18bd7972e5b6d8b78e56219f0a144a8ef5e9a993e57f195
+  torch 2.12.0+rocm10.0.0 git 8c5ddc4002609fc54816dac039975bc39d4a6665
+  triton 3.8.0, ROCm/HIP 7.15.26333
+
 patches/pytorch2.9-flexattention-small-sparse-blocks.patch
 results/gfx942-sbd-pytorch2.9.md
 ```
+
+Each patch targets the PyTorch revision in its own image; select one with the
+Dockerfile's `PATCH` build argument.
 
 ## Related upstream work
 
@@ -79,17 +89,36 @@ The patch changes only Triton-choice construction:
 1. Forward default `BLOCK_M/BLOCK_N` values are capped by the corresponding
    sparse Q/KV block sizes.
 2. Backward eligibility is evaluated after deriving actual
-   `BLOCK_M1/BLOCK_N1/BLOCK_M2/BLOCK_N2` values.
+   `BLOCK_M1/BLOCK_N1/BLOCK_M2/BLOCK_N2` values, and also checks the backward
+   template's `BLOCK_N1 % BLOCK_M1` and `BLOCK_M2 % BLOCK_N2` static assertions.
 3. Derived backward defaults are capped by sparse Q/KV block sizes.
-4. Fine sparse blocks use at most four warps; explicit user choices still win.
+4. On ROCm, `num_warps` and `num_stages` defaults are re-derived from the
+   shrunk tile rather than inherited from the dense config:
+   - forward: one warp per 2048 tile elements;
+   - backward: one warp per 16 rows of the smallest tile;
+   - backward: at least two pipeline stages when that tile is 32 rows or less.
+   Each is clamped to the config's own value and to at least one warp.
+
+Steps 1 through 3 are unconditional, because they decide whether a fine
+`BlockMask` can lower at all. Step 4 is gated on `torch.version.hip` because it
+was fitted to gfx942 measurements (see
+`results/gfx942-sbd-primus-v26.2.md`). All four are `setdefault`s, so explicit
+`fwd_`/`bwd_` kernel options still take priority.
 
 It does not modify:
 
 - Triton forward or backward template math
 - BlockMask construction or representation
 - Mask/score graph lowering
-- Dense attention interfaces
+- Dense attention interfaces or numerics
 - CUDA/CuTe or FlyDSL backends
+
+It does change dense FlexAttention's *launch parameters* on ROCm. A dense call
+builds a full `BlockMask` with a 128-token block size, so the gfx942 forward
+tile of 128x64 reaches step 4 and drops from eight warps to four. This is
+deliberate and measured: the dense no-mask control improves from 7.2387 ms to
+2.5132 ms in forward + backward. Any newer base image must re-run that control
+before this patch is trusted on it.
 
 ## Synchronizing to a newer PyTorch revision
 
@@ -109,23 +138,48 @@ PY
 
 - Caps every candidate's tile sizes to the sparse block dimensions.
 - Validates the final tile values rather than the original dense config.
-- Provides gfx942 backward choices for 64-token sparse blocks.
+- Provides gfx942 choices for 64-token and finer sparse blocks.
+- Sizes `num_warps`/`num_stages` from the tile actually being launched.
 - Preserves explicit `fwd_`/`bwd_` kernel options.
 
-3. Dry-run the patch:
+3. List the architecture's candidates, since the rules assume the tile shapes
+   they produce and gfx942 currently offers exactly one per direction:
+
+```bash
+python - <<'PY'
+import torch
+from torch._inductor.choices import InductorChoices
+
+c = InductorChoices()
+print(c.get_flex_attention_fwd_configs(128, torch.bfloat16, "cuda"))
+print(c.get_flex_attention_bwd_configs(128, torch.bfloat16, "cuda"))
+PY
+```
+
+4. Dry-run the patch:
 
 ```bash
 patch --dry-run --batch --forward -p1 \
   -d <python-site-packages> \
-  < patches/pytorch2.12-flexattention-small-sparse-blocks.patch
+  < patches/pytorch2.10-flexattention-small-sparse-blocks.patch
 ```
 
-4. If the source moved, rebase the small logical change rather than adjusting
+5. If the source moved, rebase the small logical change rather than adjusting
    hunk offsets blindly.
 
-5. Re-run:
+6. Re-derive the warp and stage rules before trusting them on a new stack;
+   they are fitted constants, not portable facts:
 
-- Dense no-mask forward and backward
+```bash
+python3 bench_driver.py --sweep fwd --blocks 256 128 64 32 16 --repeat 5 \
+  --grid '{"fwd_BLOCK_M":[],"fwd_BLOCK_N":[]}'
+python3 bench_driver.py --sweep bwd --blocks 256 128 64 32 16 --repeat 5 \
+  --grid '{"bwd_BLOCK_M1":[],"bwd_BLOCK_N1":[],"bwd_BLOCK_M2":[],"bwd_BLOCK_N2":[]}'
+```
+
+7. Re-run:
+
+- Dense no-mask forward and backward (`--dense`), which this patch also affects
 - Sparse blocks 256, 128, 64, 32, and 16
 - MHA, MQA, and GQA
 - FP16 and BF16
@@ -133,7 +187,7 @@ patch --dry-run --batch --forward -p1 \
 - Explicit user kernel options
 - Max-autotune enabled and disabled
 
-6. Update the image digest, PyTorch/Triton versions, patch context, and results
+8. Update the image digest, PyTorch/Triton versions, patch context, and results
 in this repository.
 
 ## Licensing

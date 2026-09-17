@@ -2,5 +2,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# The workload benchmark stays outside this repository by design.
+# The workload's mask module stays outside this repository by design.
+# bench_driver.py is this study's own harness and is tracked.
 benchmark.py
+bench.py
